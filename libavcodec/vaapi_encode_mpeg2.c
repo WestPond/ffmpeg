@@ -56,6 +56,40 @@ typedef struct VAAPIEncodeMPEG2Context {
 #define u2(width, value, name) put_bits(&pbc, width, value)
 #define u(width, ...) u2(width, __VA_ARGS__)
 
+static struct mpeg2_frame_rate {
+    int code;
+    float value;
+} frame_rate_tab[] = {
+    {1, 23.976},
+    {2, 24.0},
+    {3, 25.0},
+    {4, 29.97},
+    {5, 30},
+    {6, 50},
+    {7, 59.94},
+    {8, 60}
+};
+
+static int
+find_frame_rate_code(const VAEncSequenceParameterBufferMPEG2 *seq_param)
+{
+    unsigned int delta = -1;
+    int code = 1, i;
+    float frame_rate_value = seq_param->frame_rate *
+        (seq_param->sequence_extension.bits.frame_rate_extension_d + 1) /
+        (seq_param->sequence_extension.bits.frame_rate_extension_n + 1);
+
+    for (i = 0; i < sizeof(frame_rate_tab) / sizeof(frame_rate_tab[0]); i++) {
+
+        if (abs(1000 * frame_rate_tab[i].value - 1000 * frame_rate_value) < delta) {
+            code = frame_rate_tab[i].code;
+            delta = abs(1000 * frame_rate_tab[i].value - 1000 * frame_rate_value);
+        }
+    }
+
+    return code;
+}
+
 static int vaapi_encode_mpeg2_write_sequence_header(AVCodecContext *avctx,
                                                     char *data, size_t *data_len)
 {
@@ -71,7 +105,7 @@ static int vaapi_encode_mpeg2_write_sequence_header(AVCodecContext *avctx,
     u(12, vseq->picture_width,  horizontal_size_value);
     u(12, vseq->picture_height, vertical_size_value);
     u(4, vseq_var(aspect_ratio_information));
-    u(4, 8, frame_rate_code);
+    u(4, find_frame_rate_code(vseq), frame_rate_code);
     u(18, priv->bit_rate & 0x3fff, bit_rate_value);
     u(1, 1, marker_bit);
     u(10, priv->vbv_buffer_size & 0x3ff, vbv_buffer_size_value);
@@ -208,7 +242,7 @@ static int vaapi_encode_mpeg2_init_sequence_params(AVCodecContext *avctx)
     if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
         vseq->frame_rate = (float)avctx->framerate.num / avctx->framerate.den;
     else
-        vseq->frame_rate = (float)avctx->time_base.num / avctx->time_base.den;
+        vseq->frame_rate = 1000.0f / ((float)avctx->time_base.num / avctx->time_base.den);
 
     vseq->aspect_ratio_information = 1;
     vseq->vbv_buffer_size = avctx->rc_buffer_size / (16 * 1024);
